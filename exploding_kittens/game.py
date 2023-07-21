@@ -1,260 +1,33 @@
 # Adapted from https://codereview.stackexchange.com/questions/196533/simulate-a-simplified-version-of-exploding-kittens-in-python
-import random
-import cmd
-import random
-
-from collections import Counter
-
+from cmd import Cmd
 from structs import *
+from deck import *
+from player import *
+from mcts import mcts
 
 
-
-
-class Deck:
-    def __init__(self):
-        composition = {
-            CardTypes.EXPLODING_KITTEN: 4,
-            CardTypes.DEFUSE: 6,
-            CardTypes.ATTACK: 4,
-            CardTypes.FAVOR: 4,
-            CardTypes.NOPE: 5,
-            CardTypes.SHUFFLE: 4,
-            CardTypes.SKIP: 4,
-            CardTypes.SEE_THE_FUTURE: 5,
-            CardTypes.RAINBOW_CAT: 4,
-            CardTypes.POTATO_CAT: 4,
-            CardTypes.TACOCAT: 4,
-            CardTypes.CATTERMELON: 4,
-            CardTypes.BEARD_CAT: 4
-        }
-
-        self._cards = []
-        for card_type in CardTypes:
-            card_set = [Card(card_type)] * composition[card_type]
-            self._cards.extend(card_set)
-
-        #print(self._cards)
-
-
-    def shuffle(self):
-        random.shuffle(self._cards)
-
-
-    # Returns a function that acts as a filter on a set of cards
-    def card_fn(self, key=None, exclude=None, include=None):
-        null = object()
-
-        def fn(value):
-            if key:
-                value = getattr(value, key, null)
-            return (
-                (exclude and value in exclude)
-                or (include and value not in include)
-            )
-        return fn
-
-
-    # Returns and removes the first card from the deck that meets the requirements of the filter
-    def get_card(self, fn=None):
-        if fn is None:
-            fn = lambda card: False
-
-        card = None
-        cards = []
-        while card is None:
-            # Note: if self._cards is empty an IndexError will be thrown
-            card = self._cards.pop()
-            if fn(card):
-                cards.append(card)
-                card = None
-        self._cards.extend(reversed(cards))
-        return card
-
-
-    def get_cards(self, n, fn=None):
-        return tuple(self.get_card(fn=fn) for _ in range(n))
-    
-
-    def get_deck(self):
-        return self._cards
-    
-
-    def is_empty(self):
-        return len(self._cards) == 0
-    
-
-    def see_the_future(self):
-        three_cards = self._cards[-3::1].copy()
-        three_cards.reverse()
-        return three_cards
-
-
-class Player:
-    def __init__(self, id, type, game):
-        self.id = id
-        self.type = type
-        self.__game = game
-        self.__hand = []
-        self.turns_left = 1
-    
-
-    # Adds a card to the hand
-    def add_card(self, card):
-        self.__hand.append(card)
-        return card
-    
-
-    # Removes a card of the specified type to the hand and returns the removed card
-    def remove_card(self, card_type, amount=1):
-        removed_cards = []
-
-        for card in self.__hand:
-            if card.type == card_type:
-                removed_cards.append(card)
-                self.__hand.remove(card)
-                amount -= 1
-                if amount == 0:
-                    return removed_cards[0]
-
-        return removed_cards[0]
-    
-
-    def draw_card(self):
-        return self.add_card(self.__game.deck.get_card())
-
-
-    def draw_safe_card(self):
-        fn = self.__game.deck.card_fn('type', exclude={CardTypes.EXPLODING_KITTEN})
-        self.add_card(self.__game.deck.get_card(fn))
-
-
-    def draw_defuse_card(self):
-        fn = self.__game.deck.card_fn('type', include={CardTypes.DEFUSE})
-        self.add_card(self.__game.deck.get_card(fn))
-    
-
-    def draw_initial_cards(self):
-        for i in range(0, 7):
-            self.draw_safe_card()
-
-
-    def has_defuse(self):
-        for card in self.__hand:
-            if card.type == CardTypes.DEFUSE:
-                return True
-        return False
-    
-
-    # Returns the set of actions the player can perform as commands
-    def get_commands(self):
-        command_list = CommandList()
-
-        # adds draw action if the deck is not empty
-        if self.__game.deck.is_empty() == False: 
-            command_list.add_command(Command(MoveTypes.DRAW))
-
-        # sets up dictionary that counts occurences of cards' types in hand
-        card_types_in_hand = [card.type for card in self.__hand]
-        card_types_counter = Counter(card_types_in_hand)
-
-        for card_type in card_types_counter.items():
-            a = card_type[0].value.name
-            # if the card's type has an action associated with it then add it to the list of actions
-            if card_type[0].value.move_type is not None:
-                command_list.add_command(Command(card_type[0].value.move_type))
-            
-            # if there is more than 1 of a card make 2 of a kind available
-            if card_type[1] > 1:
-                command_list.add_command(Command(MoveTypes.TWO_OF_A_KIND, card_type[0]))
-            
-            # if there is more than 2 of a card make 3 of a kind available
-            if card_type[1] > 2:
-                command_list.add_command(Command(MoveTypes.THREE_OF_A_KIND, card_type[0]))
-        
-        return command_list
-    
-
-    def get_favor_actions(self):
-        actions = []
-
-        # sets up dictionary that counts occurences of cards in hand
-        card_counter = Counter(self.__hand)
-
-        for card in card_counter.items():
-            actions.append(card.type)
-        
-        return actions
-
-
-    def get_hand(self):
-        return self.__hand
-    
-
-    def get_hand_names(self):
-        return [card.get_name() for card in self.__hand]
-
-
-    def get_random_card_type_from_hand(self):
-        card_index = random.randint(0, len(self.__hand))
-        card = self.__hand[card_index]
-        return card.type
-
-
-    def give_card(self, player, card_type):
-        player.add_card(self.remove_card(card_type))
-
-
-    def get_move_input(self):
-        move = None
-        if self.type == PlayerTypes.HUMAN:
-            valid = False
-            while valid == False:
-                self.__game.out(f'Hand: {self.__hand}')
-                move = input(self.watermark('Enter a move: '))
-                try:
-                    move = MoveTypes(move.lower())
-                    valid = True
-                except KeyError:
-                    self.__game.out('Error: Please enter a valid move.')
-
-        return move
-    
-
-    def steal_chosen_card(self):
-        card = None
-        options = self.__hand.copy()
-        options.append('Play NOPE')
-
-        if self.type == PlayerTypes.HUMAN:
-            valid = False
-            while valid == False:
-                print(options)
-                card = input(self.watermark('Select a card to give (or play NOPE): '))
-
-                if card.lower() == 'play nope':
-                    return None
-                elif card in options:
-
-                    valid = True
-                else:
-                    print('Error: Please enter a valid player.')
-        
-        return card
-    
-    
-    
-
-class ExplodingKittens(cmd.Cmd):
+class ExplodingKittens(Cmd):
     def __init__(self, player_types):
         super().__init__(self)
         self.phase = GamePhases.MAIN
         self.deck, self.players = self.start_game(player_types)
         self.current_player = 0
 
+        self.command_list = ActionList()
+        self.int_commands = []
         self.chosen_player = None
         self.turns = 0
         self.favor_actions = None
         self.combo_card_type = None
+
+        print('Welcome to Exploding Kittens!\n')
+        print('Dealt 1 defuse card to each player.')
+
+        for player in self.players:
+            player.draw_defuse_card()
+
+        for player in self.players:
+            player.draw_initial_cards()
 
 
     def start_game(self, player_types):
@@ -273,12 +46,16 @@ class ExplodingKittens(cmd.Cmd):
         print(self.get_phase_banner())
 
 
-    def get_player_banner(self):
-        return f'\n{self.get_current_player().id}\'s turn!\n'
+    def print_player_banner(self):
+        print(f'\n{self.get_current_player().id}\'s turn!\n')
 
 
     def get_current_player(self):
         return self.players[self.current_player]
+    
+
+    def get_previous_player(self):
+        return self.players[self.previous_player]
 
 
     def get_phase_banner(self):
@@ -287,17 +64,17 @@ class ExplodingKittens(cmd.Cmd):
                 .format(self.get_current_player().get_hand_names(),
                         self.command_list.get_command_names())
         elif self.phase == GamePhases.WAIT_FOR_NOPE:
-            return 'Type "n" to play "Nope" within 3 seconds'
+            return 'Type "n" to play "Nope", otherwise, press enter.'
         elif self.phase == GamePhases.SELECT_PLAYER_FOR_FAVOR:
-            return f'Select a player to get a favor from: {self.get_other_players_ids()}'
+            return f'Select a player to get a favor from: {self.int_commands}'
         elif self.phase == GamePhases.SELECT_CARD_FOR_FAVOR:
-            return f'Select the card you want to give: {self.favor_actions}'
+            return f'Select the card you want to give: {self.int_commands}'
         elif self.phase == GamePhases.SELECT_PLAYER_FOR_TWOS:
-            return f'Select a player to steal a card from: {self.get_other_players_ids()}'
+            return f'Select a player to steal a card from: {self.int_commands}'
         elif self.phase == GamePhases.SELECT_PLAYER_FOR_THREES:
-            return f'Select a player to steal a card from: {self.get_other_players_ids()}'
+            return f'Select a player to steal a card from: {self.int_commands}'
         elif self.phase == GamePhases.SELECT_CARD_FOR_THREES:
-            return f'Select the card type you want to steal: {CardTypes.get_commands()}'
+            return f'Select the card type you want to steal: {self.int_commands}'
         else:
             return 'If you\'re reading this something\'s gone wrong :P'
 
@@ -306,25 +83,36 @@ class ExplodingKittens(cmd.Cmd):
     #################################################################
 
     def preloop(self):
-        print('Welcome to Exploding Kittens!\n')
-        print('Dealt 1 defuse card to each player.')
-
-        for player in self.players:
-            player.draw_defuse_card()
-
-        for player in self.players:
-            player.draw_initial_cards()
-
-        print(self.get_player_banner())
+        self.print_player_banner()
         self.start_of_phase()
         
 
     def default(self, line):
+        self.take_command(line=line)
+
+
+    # When the postcmd method returns True it ends the cmdloop
+    def postcmd(self, stop, line):
+        if len(self.players) > 1:
+            if self.get_current_player().type != PlayerTypes.HUMAN:
+                return True
+            self.start_of_phase()
+        else:
+            print(f'{self.players[0].id} is the winner!')
+            return True
+
+    #################################################################
+    # Cmd overrides end
+    #################################################################
+
+    def take_command(self, line='', action=None):
         player = self.get_current_player()
 
         if self.phase == GamePhases.MAIN:
             if line.lower() in self.command_list.get_command_names():
-                self.play_turn(line.lower())
+                self.play_turn(line=line.lower())
+            elif action is not None:
+                self.play_turn(action=action)
             else:
                 print('Error: Please enter a valid move.')
 
@@ -334,18 +122,26 @@ class ExplodingKittens(cmd.Cmd):
                 pass
 
         elif self.phase == GamePhases.SELECT_PLAYER_FOR_FAVOR:
-            if int(line) < len(self.players):
-                self.favor_actions = self.players[int(line)].get_favor_actions()
-                self.switch_player(int(line))
+            if line != '' and int(line) < len(self.int_commands) and int(line) >= 0:
+                self.favor_commands = self.int_commands[int(line)].get_favor_commands()
+                self.switch_player(self.int_commands[int(line)])
                 self.phase = GamePhases.SELECT_CARD_FOR_FAVOR
+                self.int_commands = IntCommandList(self.favor_commands)
             else:
                 print('Error: Please enter a valid digit.')
 
         elif self.phase == GamePhases.SELECT_CARD_FOR_FAVOR:
-            if int(line) < len(self.favor_actions):
-                card_type = CardTypes.get_from_command(line)
+            if action is not None:
+                card_type = action.given_card
                 removed_card = player.remove_card(card_type)
-                self.previous_player.add_card(removed_card)
+                self.get_previous_player().add_card(removed_card)
+                self.switch_to_previous_player()
+                self.get_current_player().remove_card(CardTypes.FAVOR)
+                self.phase = GamePhases.MAIN
+            elif int(line) < len(self.int_commands) and int(line) >= 0:
+                card_type = self.int_commands[int(line)]
+                removed_card = player.remove_card(card_type)
+                self.get_previous_player().add_card(removed_card)
                 self.switch_to_previous_player()
                 self.get_current_player().remove_card(CardTypes.FAVOR)
                 self.phase = GamePhases.MAIN
@@ -353,94 +149,141 @@ class ExplodingKittens(cmd.Cmd):
                 print('Error: Please enter a valid digit.')
 
         elif self.phase == GamePhases.SELECT_PLAYER_FOR_TWOS:
-            if int(line) < len(self.players):
-                player_index = self.players.index(line.lower())
-                other_player = self.players[player_index]
-                card_type = other_player.get_random_card_type_from_hand()
-                removed_card = other_player.remove_card(card_type)
-                player.add_card(removed_card)
-                player.remove_card(self.combo_card_type, 2)
+            if int(line) < len(self.int_commands):
+                requested_player = self.int_commands[int(line)]
+                self.play_twos(self.combo_card_type, requested_player)
                 self.phase = GamePhases.MAIN
             else:
                 print('Error: Please enter a valid digit.')
 
         elif self.phase == GamePhases.SELECT_PLAYER_FOR_THREES:
-            if int(line) < len(self.players):
-                player_index = self.players.index(line.lower())
-                self.chosen_player = self.players[player_index]
+            if int(line) < len(self.int_commands):
+                self.chosen_player = self.int_commands[int(line)]
+                self.int_commands = IntCommandList(CardTypes.get_playable_types())
                 self.phase = GamePhases.SELECT_CARD_FOR_THREES
             else:
                 print('Error: Please enter a valid digit.')
 
         elif self.phase == GamePhases.SELECT_CARD_FOR_THREES:
-            if int(line) < len(self.get_current_player.get_hand()):
-                self.chosen_player.remove_card(CardTypes[line.lower()])
-                player.remove_card(self.combo_card_type, 3)
+            if int(line) < len(self.int_commands):
+                requested_card_type = self.int_commands[int(line)]
+                self.play_threes(self.combo_card_type, self.chosen_player, requested_card_type)
                 self.phase = GamePhases.MAIN
             else:
                 print('Error: Please enter a valid digit.')
-    
 
-    # When the postcmd method returns True it ends the cmdloop
-    def postcmd(self, stop, line):
-        if len(self.players) > 1:
-            self.start_of_phase()
-        else:
-            print(f'{self.players[0]} is the winner!')
-            return True
 
-    #################################################################
-    # Cmd overrides end
-    #################################################################
-
-    def play_turn(self, command):
+    def play_turn(self, line='', action=None):
         player = self.get_current_player()
-        move = MoveTypes(command)
 
-        if move == MoveTypes.DRAW:
+        # splits command into dictionary
+        if action is None:
+            action = Action.from_command(self.get_current_player(), line)
+
+
+        if action.move_type == MoveTypes.DRAW:
             card = player.draw_card()
             print(f'Drew {card.get_name()}!')
 
             if card.type == CardTypes.EXPLODING_KITTEN:
                 # Check if the player has a defuse card
-                if player.has_defuse():
+                if player.has_card(CardTypes.DEFUSE):
                     player.remove_card(CardTypes.DEFUSE)
                     player.remove_card(CardTypes.EXPLODING_KITTEN)
+                    self.deck.add_kitten()
                     print('Used a defuse card!')
                 else:
                     self.explode()
                     print(f'No defuse cards left, {player.id} is out!')
                     self.next_player()
                     return
-
+                
             player.turns_left -= 1
-        elif move == MoveTypes.ATTACK:
+
+        elif action.move_type == MoveTypes.ATTACK:
+            print('Played attack!')
             self.next_player(attack=True)
             player.remove_card(CardTypes.ATTACK)
-        elif move == MoveTypes.FAVOR:
-            self.phase = GamePhases.SELECT_PLAYER_FOR_FAVOR
-        elif move == MoveTypes.NOPE:
-            pass
-        elif move == MoveTypes.SHUFFLE:
+
+        elif action.move_type == MoveTypes.FAVOR:
+            print('Played favor!')
+            if action.requested_player is not None:
+                self.switch_player(action.requested_player)
+                self.phase = GamePhases.SELECT_CARD_FOR_FAVOR
+                self.int_commands = IntCommandList(self.get_current_player().get_favor_commands())
+            else:
+                self.int_commands = IntCommandList(self.get_other_players())
+                self.phase = GamePhases.SELECT_PLAYER_FOR_FAVOR
+            
+        elif action.move_type == MoveTypes.NOPE:
+            print('Played nope!')
+
+        elif action.move_type == MoveTypes.SHUFFLE:
+            print('Played shuffle!')
             self.deck.shuffle()
             player.remove_card(CardTypes.SHUFFLE)
-        elif move == MoveTypes.SKIP:
+
+        elif action.move_type == MoveTypes.SKIP:
+            print('Played skip!')
             player.turns_left -= 1
             player.remove_card(CardTypes.SKIP)
-        elif move == MoveTypes.SEE_THE_FUTURE:
+
+        elif action.move_type == MoveTypes.SEE_THE_FUTURE:
+            print('Played see the future!')
             future_cards = self.deck.see_the_future()
             future_cards = [f'#{i}: {future_cards[i].get_name()}' for i in range(0, 3)]
             print(f'The future cards are {future_cards}')
             player.remove_card(CardTypes.SEE_THE_FUTURE)
-        elif move == MoveTypes.TWO_OF_A_KIND:
-            self.phase = GamePhases.SELECT_PLAYER_FOR_TWOS
-            self.combo_card_type = command.card_type
-        elif move == MoveTypes.THREE_OF_A_KIND:
-            self.phase = GamePhases.SELECT_PLAYER_FOR_THREES
-            self.combo_card_type = command.card_type
+
+        elif action.move_type == MoveTypes.TWO_OF_A_KIND:
+            print('Played two of a kind!')
+            if action.requested_player is not None:
+                self.play_twos(action.played_card_type, action.requested_player)
+            else:
+                self.phase = GamePhases.SELECT_PLAYER_FOR_TWOS
+                self.combo_card_type = action.played_card_type
+                self.int_commands = IntCommandList(self.get_other_players())
+
+        elif action.move_type == MoveTypes.THREE_OF_A_KIND:
+            print('Played three of a kind!')
+            if action.requested_player is not None:
+                self.play_threes(action.played_card_type, action.requested_player, action.requested_card_type)
+            else:
+                self.phase = GamePhases.SELECT_PLAYER_FOR_THREES
+                self.combo_card_type = action.played_card_type
+                self.int_commands = IntCommandList(self.get_other_players())
 
         if player.turns_left == 0:
             self.next_player()
+
+
+    def play_twos(self, played_card_type, requested_player):
+        requested_card_type = requested_player.get_random_card_type_from_hand()
+        removed_card = requested_player.remove_card(requested_card_type)
+        self.get_current_player().add_card(removed_card)
+        self.get_current_player().remove_card(played_card_type, 2)
+        print(f'Stole {removed_card.get_name()} from {requested_player.id}!')
+
+
+    def play_threes(self, played_card_type, requested_player, requested_card_type):
+        if requested_player.has_card(requested_card_type):
+            removed_card = requested_player.remove_card(requested_card_type)
+            self.get_current_player().add_card(removed_card)
+            print(f'Stole {removed_card.get_name()} from {requested_player.id}!')
+        else:
+            print(f'{requested_player.id} did not have {requested_card_type.value.name}!')
+
+        self.get_current_player().remove_card(self.combo_card_type, 3)
+
+
+    def get_other_players(self):
+        other_players = []
+
+        for player in self.players:
+            if player != self.get_current_player():
+                other_players.append(player)
+        
+        return other_players
 
 
     def get_other_players_ids(self):
@@ -464,13 +307,14 @@ class ExplodingKittens(cmd.Cmd):
         else:
             self.turns = 0
             self.get_current_player().turns_left = 1
-        
-        print(self.get_player_banner())
+
+        if self.get_current_player().type == PlayerTypes.HUMAN:
+            self.print_player_banner()
 
 
-    def switch_player(self, player_index):
-        self.previous_player = self.get_current_player()
-        self.current_player = player_index
+    def switch_player(self, player):
+        self.previous_player = self.current_player
+        self.current_player = self.players.index(player)
     
 
     def switch_to_previous_player(self):
@@ -483,33 +327,92 @@ class ExplodingKittens(cmd.Cmd):
         self.players.pop(self.current_player)
         self.current_player -= 1
 
-    #################################################################
-    # State class methods
-    #################################################################
 
-    def getCurrentPlayer():
-        pass
 
-    def getPossibleActions():
-        pass
+class EKState():
+    def __init__(self, game: ExplodingKittens):
+        self.game = game
 
-    def takeAction(action):
-        pass
+    def getCurrentPlayer(self):
+        return self.game.current_player
 
-    def isTerminal():
-        pass
+    def getPossibleActions(self):
+        if self.game.phase == GamePhases.MAIN:
+            action_list = self.game.get_current_player().get_commands(True).as_list()
+        else:
+            action_list = self.game.get_current_player().get_favor_commands().as_list()
+        return action_list
 
-    def getReward():
-        pass
+    def takeAction(self, action):
+        self.game.take_command(action=action)
+        return EKState(self.game)
 
+    def isTerminal(self):
+        return len(self.game.players) <= 1
+
+    def getReward(self):
+        return 1
+    
+
+class IntCommandList:
+    def __init__(self, list_in):
+        self.obj_list = list_in
+        if len(self.obj_list) != 0:
+            if self.obj_list[0].__class__ is Player:
+                self.obj_type = 'player'
+            elif self.obj_list is ActionList:
+                self.obj_type = 'card'
+            else:
+                self.obj_type = ''
+        else:
+            self.obj_type = ''
+
+    def __getitem__(self, key):
+        return self.obj_list[key]
+    
+    def __len__(self):
+        return len(self.obj_list)
+
+    def __repr__(self):
+        str_out = ''
+
+        for i in range (0, len(self.obj_list)):
+            if self.obj_type == 'player':
+                name = self.obj_list[i].id
+            elif self.obj_type == 'card':
+                name = self.obj_list[i].given_card.get_name()
+
+            str_out += f'{i}: {name}, '
+        
+        return str_out
     
 
 if __name__ == "__main__":
-    player_types = (
-        PlayerTypes.HUMAN,
-        PlayerTypes.HUMAN,
-        PlayerTypes.HUMAN,
-        PlayerTypes.HUMAN
-    )
-    game = ExplodingKittens(player_types)
-    game.cmdloop()
+    for i in range(0, 10):
+        player_types = (
+            PlayerTypes.MCTS,
+            PlayerTypes.RANDOM,
+            PlayerTypes.RANDOM,
+            PlayerTypes.RANDOM
+        )
+        game = ExplodingKittens(player_types)
+        state = EKState(game)
+        searcher = mcts(timeLimit=1000)
+
+        while len(game.players) > 1:
+            player_type = game.get_current_player().type
+
+            if player_type == PlayerTypes.HUMAN:
+                game.cmdloop()
+            elif player_type == PlayerTypes.RANDOM:
+                actions = state.getPossibleActions()
+                action_i = random.randint(0, len(actions) - 1)
+                if len(game.players) <= 1: break
+                state = state.takeAction(actions[action_i])
+            elif player_type == PlayerTypes.MCTS:
+                try:
+                    best_action = searcher.search(state)
+                except Exception:
+                    pass
+                if len(game.players) <= 1: break
+                state = state.takeAction(best_action)
